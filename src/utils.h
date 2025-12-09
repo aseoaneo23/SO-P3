@@ -153,5 +153,5 @@ void printVars();
 void Do_pmap(void);
 int BuscarVariable(char *var, char *e[]);
 void envvar(char *tr[], char *envp[]);
-void fork();
+// void fork();
 // void delRec();

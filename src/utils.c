@@ -1885,7 +1885,7 @@ void envvar(char *tr[], char *envp[]) {
     }
 }
 
-void fork(){
+// void fork(){
     
-}
+// }
 

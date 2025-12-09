@@ -15,6 +15,7 @@ int main(int argc, char *argv[], char *envp[])
     bool terminado = false;
     tList historical;
     tList memoryBlockList;
+    tList proccessList;
     struct dirOps ops = {0, 0, 0, 0};
 
     //Historical list intialization
@@ -23,16 +24,18 @@ int main(int argc, char *argv[], char *envp[])
 
     //Memory list inicialization
     createEmptyList(&memoryBlockList);
+    createEmptyList(&proccessList);
 
     while (!terminado) {
         char *comando = (char*)malloc(MAX_LENGTH * sizeof(char));
         imprimirPrompt();
         leerEntrada(comando);
-        terminado = procesarEntrada(comando, &historical, &memoryBlockList, &ops, envp);
+        terminado = procesarEntrada(comando, &historical, &memoryBlockList, &ops, envp, &proccessList);
         free(comando);
     }
 
     cleanListFromMemory(&historical);
     cleanMemListFromMemory(&memoryBlockList);
+    free(proccessList);
     return 0;
 }

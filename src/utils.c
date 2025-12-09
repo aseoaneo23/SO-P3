@@ -5,12 +5,15 @@
 #include <grp.h>
 #include <pwd.h>
 #include <regex.h>
+#include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/shm.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -93,7 +96,7 @@ void inicializarFicherosEstandar() {
 }
 
 bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
-                     struct dirOps *ops, char *envp[]) {
+                     struct dirOps *ops, char *envp[], tList *processList) {
 
     bool terminado = false;
 
@@ -120,7 +123,7 @@ bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
             printHistorical(*historical);
         else
             manageHistoricalWMods(trozos[1], historical, memoryBlocksList, ops,
-                                  envp);
+                                  envp, processList);
     else if (strcmp(trozos[0], "exit") == 0 || strcmp(trozos[0], "quit") == 0 ||
              strcmp(trozos[0], "bye") == 0)
         terminado = true;
@@ -201,8 +204,12 @@ bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
         writeCmd(&trozos[1]);
     else if (strcmp(trozos[0], "envvar") == 0) {
         envvar(trozos, envp);
+    } else if (strcmp(trozos[0], "fork") == 0) {
+        forkCmd(processList);
+    } else if (strcmp(trozos[0], "exec") == 0) {
+        execCmd(trozos, num_trozos);
     } else
-        printf(ROJO_ERR "Comando '%s' desconocido\n" RESET_COL, trozos[0]);
+        searchCmdOnPath(trozos, num_trozos);
 
     free(trozos);
     return terminado;
@@ -286,7 +293,8 @@ void printHistorical(tList historical) {
 }
 
 void customHistoricalPrint(MOD type, char *mod, tList historical, tList memList,
-                           struct dirOps *ops, char *envp[]) {
+                           struct dirOps *ops, char *envp[],
+                           tList *processList) {
     tPosL p = historical;
     int extractedDigit = extractDigit(mod, type), i = 1, totalItems, offset;
     tPosL lastElement = last(historical);
@@ -300,7 +308,8 @@ void customHistoricalPrint(MOD type, char *mod, tList historical, tList memList,
         tItemL command = getItem(p);
 
         if (command != NULL) {
-            procesarEntrada(command, &historical, &memList, ops, envp);
+            procesarEntrada(command, &historical, &memList, ops, envp,
+                            processList);
         } else {
             printf(
                 AMARILLO_WARN
@@ -406,6 +415,27 @@ void helpCmd(char *mod) {
                "putenv]\n"
                "          v val : cambia el valor de la variable v a "
                "val]\n" RESET_COL);
+    } else if (strcmp(mod, "exec") == 0) {
+        printf(AMARILLO_WARN "USO: exec progspec\n"
+                             "\n"
+                             "Formato de ejecución:\n"
+                             "    executablefile  [arg1 arg2 ...] [@pri] [&]\n"
+                             "\n"
+                             "Elementos:\n"
+                             "  executablefile   Nombre del ejecutable a "
+                             "lanzar (usado con execvp)\n"
+                             "  arg1 arg2 ...    Cualquier número de "
+                             "argumentos para el programa\n"
+                             "  @pri             (Opcional) Cambia la "
+                             "prioridad del proceso a 'pri' antes de ejecutar\n"
+                             "  &                (Opcional) Ejecuta el proceso "
+                             "en segundo plano y lo añade a la lista\n"
+                             "                   de procesos background\n"
+                             "\n"
+                             "Ejemplos:\n"
+                             "  exec ls -l\n"
+                             "  exec myprog arg1 arg2 @5\n"
+                             "  exec server @10 &\n" RESET_COL);
     } else {
         printf(ROJO_ERR "Comando '%s' desconocido en help\n" RESET_COL, mod);
     }
@@ -597,14 +627,15 @@ int extractDigit(char *mod, MOD modifierType) {
 }
 
 void manageHistoricalWMods(char *mod, tList *historical, tList *memList,
-                           struct dirOps *ops, char *envp[]) {
+                           struct dirOps *ops, char *envp[],
+                           tList *processList) {
     MOD selectedMod = identifyModifier(mod);
 
     switch (selectedMod) {
     case N:
     case LAST_N:
         customHistoricalPrint(selectedMod, mod, *historical, *memList, ops,
-                              envp);
+                              envp, processList);
         break;
     case COUNT:
         printf("Total de elementos en el histórico: %d\n",
@@ -1885,7 +1916,126 @@ void envvar(char *tr[], char *envp[]) {
     }
 }
 
-// void fork(){
-    
-// }
+int vaciarListaProcesos(tList *listaProcesos) {
+    tProcess *proc;
+    tPosL siguiente, pos = first(*listaProcesos);
 
+    while (pos != LNULL) {
+        if (pos->next != LNULL) {
+            siguiente = pos->next;
+        }
+        proc = getItem(pos);
+        if (proc) {
+            free(proc);
+        }
+        pos = siguiente;
+    }
+
+    if (isEmptyList(*listaProcesos)) {
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+void forkCmd(tList *processList) {
+    pid_t pid;
+    if ((pid = fork()) == 0) {
+        if (vaciarListaProcesos(processList) == -1) {
+            printf(ROJO_ERR
+                   "No se ha podido vaciar la lista de procesos\n" RESET_COL);
+        }
+        printf("ejecutando proceso %d\n", getpid());
+    } else if (pid != -1)
+        waitpid(pid, NULL, 0);
+}
+
+// Encapuslamos lógica de extracción de datos del comando exec. Devuelve 2 si hay error de sintaxis,
+// 1 bg o 0 fg.
+int extractProgSpec(char *program, char *args[], int *priority, int num_trozos,
+                     char *trozos[]) {
+    int isBg = 0;
+    program = NULL;
+
+    if (num_trozos < 2) {
+        helpCmd("exec");
+        return 2;
+    }
+
+    program = trozos[1];
+    int ai = 0;
+
+    args[ai++] = program;
+
+    // Parsear argumentos
+    int i;
+    for (i = 2; i < num_trozos; i++) {
+        if (trozos[i][0] == '@') {
+            *priority = atoi(trozos[i] + 1);
+            continue;
+        }
+
+        // Detectar &
+        if (strcmp(trozos[i], "&") == 0) {
+            isBg = 1;
+            continue;
+        }
+
+        // Argumento normal
+        args[ai++] = trozos[i];
+    }
+
+    args[ai] = NULL; // El execvp necesita el flag de NULL en la última
+                     // posición.
+
+    return isBg;
+}
+
+void execCmd(char *trozos[], int num_trozos) {
+    char *program = NULL;
+    char *args[4096];
+    int *priority;
+    int isBg = extractProgSpec(program, args, priority, num_trozos, trozos);
+    tProcess newProc;
+    if (isBg == 2)
+        return;
+
+    // Cambiar prioridad
+    if (priority != 0) {
+        if (setpriority(PRIO_PROCESS, 0, *priority) < 0)
+            perror("Error al cambiar prioridad");
+    }
+
+    // Background
+    if (isBg) {
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            execvp(program, args);
+            perror("execvp");
+            exit(1);
+        }
+        printf("Proceso %d ejecutándose en background\n", pid);
+        return;
+    }
+
+    // Foreground
+    execvp(program, args);
+    perror("execvp");
+}
+
+void searchCmdOnPath(char *trozos[], int num_trozos) {
+    char *program;
+    char *args[4096];
+    int *priority;
+    bool isBg = extractProgSpec(program, args, priority, num_trozos, trozos);
+
+    if (execlp(trozos[0], trozos[1]) == -1) {
+        if (errno == ENOEXEC) {
+            printf(ROJO_ERR "Comando '%s' desconocido\n" RESET_COL, trozos[0]);
+        } else if (errno == EACCES) {
+            printf(ROJO_ERR "Problema de permisos para exec\n" RESET_COL,
+                   trozos[0]);
+        }
+    }
+}

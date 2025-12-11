@@ -81,6 +81,12 @@ typedef struct tProcess
     int priority;
 } tProcess;
 
+typedef struct SEN
+{
+    char *nombre;
+    int senal;
+} SEN;
+
 void imprimirPrompt();
 void leerEntrada(char *comando);
 void inicializarFicherosEstandar();
@@ -154,8 +160,14 @@ void Do_pmap(void);
 int BuscarVariable(char *var, char *e[]);
 void envvar(char *tr[], char *envp[]);
 void forkCmd(tList *processList);
-void execCmd(char *trozos[], int num_trozos);
-void searchCmdOnPath(char *trozos[], int num_trozos);
+void execCmd(char *trozos[], int num_trozos, tList *proccessList);
+void searchCmdOnPath(char *trozos[], int num_trozos, tList *proccessList);
 int extractProgSpec(char *program, char *args[], int *priority, int num_trozos,
                      char *trozos[]);
+void jobs(tList *proccessList);
+int vaciarListaProcesos(tList *listaProcesos);
+void imprimirListaProcesos(tList *proccessList);
+procStatus updatedProcStatus(pid_t proccessPid);
+char *tipoProccessToString(procStatus status);
+void deljobs(tList *proccessList, char *trozos[], int num_trozos);
 // void delRec();

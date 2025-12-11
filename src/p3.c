@@ -36,6 +36,5 @@ int main(int argc, char *argv[], char *envp[])
 
     cleanListFromMemory(&historical);
     cleanMemListFromMemory(&memoryBlockList);
-    free(proccessList);
     return 0;
 }

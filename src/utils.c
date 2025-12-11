@@ -49,6 +49,78 @@
 #define RECB 2
 #define NOREC 0
 
+
+static struct SEN sigstrnum[]={   
+	{"HUP", SIGHUP},
+	{"INT", SIGINT},
+	{"QUIT", SIGQUIT},
+	{"ILL", SIGILL}, 
+	{"TRAP", SIGTRAP},
+	{"ABRT", SIGABRT},
+	{"IOT", SIGIOT},
+	{"BUS", SIGBUS},
+	{"FPE", SIGFPE},
+	{"KILL", SIGKILL},
+	{"USR1", SIGUSR1},
+	{"SEGV", SIGSEGV},
+	{"USR2", SIGUSR2}, 
+	{"PIPE", SIGPIPE},
+	{"ALRM", SIGALRM},
+	{"TERM", SIGTERM},
+	{"CHLD", SIGCHLD},
+	{"CONT", SIGCONT},
+	{"STOP", SIGSTOP},
+	{"TSTP", SIGTSTP}, 
+	{"TTIN", SIGTTIN},
+	{"TTOU", SIGTTOU},
+	{"URG", SIGURG},
+	{"XCPU", SIGXCPU},
+	{"XFSZ", SIGXFSZ},
+	{"VTALRM", SIGVTALRM},
+	{"PROF", SIGPROF},
+	{"WINCH", SIGWINCH}, 
+	{"IO", SIGIO},
+	{"SYS", SIGSYS},
+/*senales que no hay en todas partes*/
+#ifdef SIGPOLL
+	{"POLL", SIGPOLL},
+#endif
+#ifdef SIGPWR
+	{"PWR", SIGPWR},
+#endif
+#ifdef SIGEMT
+	{"EMT", SIGEMT},
+#endif
+#ifdef SIGINFO
+	{"INFO", SIGINFO},
+#endif
+#ifdef SIGSTKFLT
+	{"STKFLT", SIGSTKFLT},
+#endif
+#ifdef SIGCLD
+	{"CLD", SIGCLD},
+#endif
+#ifdef SIGLOST
+	{"LOST", SIGLOST},
+#endif
+#ifdef SIGCANCEL
+	{"CANCEL", SIGCANCEL},
+#endif
+#ifdef SIGTHAW
+	{"THAW", SIGTHAW},
+#endif
+#ifdef SIGFREEZE
+	{"FREEZE", SIGFREEZE},
+#endif
+#ifdef SIGLWP
+	{"LWP", SIGLWP},
+#endif
+#ifdef SIGWAITING
+	{"WAITING", SIGWAITING},
+#endif
+ 	{NULL,-1},
+	};  /*fin array sigstrnum */
+
 Fichero listaFicheros[MAX_FICHEROS];
 extern char **environ;
 
@@ -96,10 +168,10 @@ void inicializarFicherosEstandar() {
 }
 
 bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
-                     struct dirOps *ops, char *envp[], tList *processList) {
+                     struct dirOps *ops, char *envp[], tList *proccessList) {
 
     bool terminado = false;
-
+    signal(SIGCHLD, SIG_DFL);
     updateHistorical(historical, comando);
 
     char **trozos = malloc(10 * sizeof(char *));
@@ -123,7 +195,7 @@ bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
             printHistorical(*historical);
         else
             manageHistoricalWMods(trozos[1], historical, memoryBlocksList, ops,
-                                  envp, processList);
+                                  envp, proccessList);
     else if (strcmp(trozos[0], "exit") == 0 || strcmp(trozos[0], "quit") == 0 ||
              strcmp(trozos[0], "bye") == 0)
         terminado = true;
@@ -205,11 +277,15 @@ bool procesarEntrada(char *comando, tList *historical, tList *memoryBlocksList,
     else if (strcmp(trozos[0], "envvar") == 0) {
         envvar(trozos, envp);
     } else if (strcmp(trozos[0], "fork") == 0) {
-        forkCmd(processList);
+        forkCmd(proccessList);
     } else if (strcmp(trozos[0], "exec") == 0) {
-        execCmd(trozos, num_trozos);
+        execCmd(trozos, num_trozos, proccessList);
+    } else if (strcmp(trozos[0], "jobs") == 0) {
+        jobs(proccessList);
+    } else if(strcmp(trozos[0], "deljobs")==0) {
+        deljobs(proccessList, trozos, num_trozos);
     } else
-        searchCmdOnPath(trozos, num_trozos);
+        searchCmdOnPath(trozos, num_trozos, proccessList);
 
     free(trozos);
     return terminado;
@@ -294,7 +370,7 @@ void printHistorical(tList historical) {
 
 void customHistoricalPrint(MOD type, char *mod, tList historical, tList memList,
                            struct dirOps *ops, char *envp[],
-                           tList *processList) {
+                           tList *cprocessList) {
     tPosL p = historical;
     int extractedDigit = extractDigit(mod, type), i = 1, totalItems, offset;
     tPosL lastElement = last(historical);
@@ -309,7 +385,7 @@ void customHistoricalPrint(MOD type, char *mod, tList historical, tList memList,
 
         if (command != NULL) {
             procesarEntrada(command, &historical, &memList, ops, envp,
-                            processList);
+                            cprocessList);
         } else {
             printf(
                 AMARILLO_WARN
@@ -628,14 +704,14 @@ int extractDigit(char *mod, MOD modifierType) {
 
 void manageHistoricalWMods(char *mod, tList *historical, tList *memList,
                            struct dirOps *ops, char *envp[],
-                           tList *processList) {
+                           tList *cprocessList) {
     MOD selectedMod = identifyModifier(mod);
 
     switch (selectedMod) {
     case N:
     case LAST_N:
         customHistoricalPrint(selectedMod, mod, *historical, *memList, ops,
-                              envp, processList);
+                              envp, cprocessList);
         break;
     case COUNT:
         printf("Total de elementos en el histórico: %d\n",
@@ -1826,6 +1902,91 @@ void Do_pmap(void) /*sin argumentos*/
 
 /*P3 - PROCESOS MULTIPROGRAMADOS */
 
+void sigchld_handler(int sig, tPosL pos, tList *proccessList) {
+    int status;
+    pid_t pid;
+
+    // recoger TODOS los hijos muertos sin bloquear
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        deleteAtPosition(pos, proccessList); // <-- esto lo haces tú
+    }
+//TODO: acabar handler y ver tema de la eliminación de zombies.
+}
+
+
+int ValorSenal(char * sen)  /*devuelve el numero de senial a partir del nombre*/ 
+{ 
+  int i;
+  for (i=0; sigstrnum[i].nombre!=NULL; i++)
+  	if (!strcmp(sen, sigstrnum[i].nombre))
+		return sigstrnum[i].senal;
+  return -1;
+}
+
+
+char *NombreSenal(int sen)  /*devuelve el nombre senal a partir de la senal*/ 
+{			/* para sitios donde no hay sig2str*/
+ int i;
+  for (i=0; sigstrnum[i].nombre!=NULL; i++)
+  	if (sen==sigstrnum[i].senal)
+		return sigstrnum[i].nombre;
+ return ("SIGUNKNOWN");
+}
+
+char *tipoProccessToString(procStatus status) {
+    switch (status) {
+    case ACTIVE:
+        return "ACTIVE";
+    case SIGNALED:
+        return "SIGNALED";
+    case STOPPED:
+        return "STOPPED";
+    case FINISHED:
+        return "FINISHED";
+    default:
+        return "UNKWONWN STATUS";
+    }
+}
+
+procStatus updatedProcStatus(pid_t proccessPid) {
+    int status;
+    pid_t pid = waitpid(proccessPid, &status, WNOHANG | WUNTRACED);
+
+    if (pid == 0)
+        return ACTIVE;
+
+    if (pid == -1) {
+        perror("waitpid");
+        exit(EXIT_FAILURE);
+    }
+
+    if (WIFEXITED(status)) {
+        return FINISHED;
+    } else if (WIFSIGNALED(status)) {
+        return SIGNALED;
+    } else if (WIFSTOPPED(status)) {
+        return STOPPED;
+    }
+}
+
+void imprimirListaProcesos(tList *proccessList) {
+    tPosL pos = first(*proccessList);
+    tProcess *item;
+    procStatus status;
+    printf(VERDE_SCS "*** LISTA DE PROCESOS EN SEGUNDO PLANO ***\n" RESET_COL);
+    printf("%-8s %-10s %-8s %-20s %-30s\n", "PID", "STATUS", "PRIORITY",
+           "LAUNCH-DATE", "CMDLINE");
+
+    while (pos != LNULL) {
+        item = getItem(pos);
+        status = updatedProcStatus(item->pid);
+        printf("%-8d %-10s %-8d %-20s %-30s\n", item->pid,
+               tipoProccessToString(status), item->priority, item->fecha,
+               item->cmdLine);
+        pos = next(pos);
+    }
+}
+
 int BuscarVariable(char *var,
                    char *e[]) { /*busca una variable en el entorno que se le
                                    pasa como parámetro devuelve la posicion de
@@ -1921,9 +2082,7 @@ int vaciarListaProcesos(tList *listaProcesos) {
     tPosL siguiente, pos = first(*listaProcesos);
 
     while (pos != LNULL) {
-        if (pos->next != LNULL) {
-            siguiente = pos->next;
-        }
+        siguiente = next(pos);
         proc = getItem(pos);
         if (proc) {
             free(proc);
@@ -1938,10 +2097,10 @@ int vaciarListaProcesos(tList *listaProcesos) {
     }
 }
 
-void forkCmd(tList *processList) {
+void forkCmd(tList *cprocessList) {
     pid_t pid;
     if ((pid = fork()) == 0) {
-        if (vaciarListaProcesos(processList) == -1) {
+        if (vaciarListaProcesos(cprocessList) == -1) {
             printf(ROJO_ERR
                    "No se ha podido vaciar la lista de procesos\n" RESET_COL);
         }
@@ -1950,92 +2109,165 @@ void forkCmd(tList *processList) {
         waitpid(pid, NULL, 0);
 }
 
-// Encapuslamos lógica de extracción de datos del comando exec. Devuelve 2 si hay error de sintaxis,
-// 1 bg o 0 fg.
+// Encapuslamos lógica de extracción de datos del comando exec. Devuelve 2 si
+// hay error de sintaxis, 1 bg o 0 fg.
 int extractProgSpec(char *program, char *args[], int *priority, int num_trozos,
-                     char *trozos[]) {
-    int isBg = 0;
-    program = NULL;
+                    char *trozos[]) {
+    int isBg = 0, argIdx = 0, i;
+    *priority = 0;
 
-    if (num_trozos < 2) {
-        helpCmd("exec");
-        return 2;
-    }
-
-    program = trozos[1];
-    int ai = 0;
-
-    args[ai++] = program;
+    strcpy(program, trozos[0]);
+    args[argIdx++] = program;
 
     // Parsear argumentos
-    int i;
-    for (i = 2; i < num_trozos; i++) {
-        if (trozos[i][0] == '@') {
-            *priority = atoi(trozos[i] + 1);
-            continue;
-        }
+    if (num_trozos > 1) {
+        for (i = 1; i < num_trozos; i++) {
+            if (trozos[i][0] == '@') {
+                *priority = atoi(trozos[i] + 1);
+                continue;
+            }
 
-        // Detectar &
-        if (strcmp(trozos[i], "&") == 0) {
-            isBg = 1;
-            continue;
-        }
+            // Detectar &
+            if (strcmp(trozos[i], "&") == 0) {
+                isBg = 1;
+                continue;
+            }
 
-        // Argumento normal
-        args[ai++] = trozos[i];
+            // Argumento normal
+            args[argIdx++] = trozos[i];
+        }
     }
 
-    args[ai] = NULL; // El execvp necesita el flag de NULL en la última
-                     // posición.
+    args[argIdx] = NULL; // El execvp necesita el flag de NULL en la última
+                         // posición.
 
     return isBg;
 }
 
-void execCmd(char *trozos[], int num_trozos) {
-    char *program = NULL;
+void execCmd(char *trozos[], int num_trozos, tList *proccessList) {
+    tProcess *newProc;
+    char *program;
     char *args[4096];
     int *priority;
-    int isBg = extractProgSpec(program, args, priority, num_trozos, trozos);
-    tProcess newProc;
+    char date[TAM_FECHA + TAM_HORA];
+
+    program = malloc(1024 * sizeof(char));
+    priority = malloc(3 * sizeof(int));
+
+    if (num_trozos < 2) {
+        helpCmd("exec");
+        return;
+    }
+
+    int isBg = extractProgSpec(
+        program, args, priority, num_trozos - 1,
+        trozos + 1); // Se excluye el "exec" tanto de trozos como de num_trozos
+
     if (isBg == 2)
         return;
 
     // Cambiar prioridad
-    if (priority != 0) {
+    if (*priority != 0) {
         if (setpriority(PRIO_PROCESS, 0, *priority) < 0)
             perror("Error al cambiar prioridad");
     }
 
-    // Background
-    if (isBg) {
+    // // Background
+    // if (isBg) {
+    //     pid_t pid = fork();
+    //     if (pid == 0) {
+    //         execvp(program, args);
+    //         perror("execvp");
+    //         exit(1);
+    //     } else if(pid != -1){
+    //         newProc = malloc(sizeof(tProcess));
+    //         newProc->pid = pid;
+    //         formatDate(time(NULL), date);
+    //         newProc->fecha = strdup(date);
+    //         newProc->status = ACTIVE;
+    //         newProc->cmdLine = strdup(program);
+    //         newProc->priority = *priority;
+    //         if (!insertItem(newProc, LNULL, proccessList))
+    //             printf(ROJO_ERR "No se ha podido insertar el proceso en la "
+    //                             "lista.\n" RESET_COL);
+    //         printf("Proceso %d ejecutándose en background\n", pid);
+    //     }
+    //     return;
+    // }
 
+    // Foreground
+    execvp(program, args);
+    perror("execvp");
+
+    free(priority);
+}
+
+void searchCmdOnPath(char *trozos[], int num_trozos, tList *proccessList) {
+    tProcess *newProc;
+    char *program;
+    char *args[4096];
+    int *priority;
+    char date[TAM_FECHA + TAM_HORA];
+
+    program = malloc(1024 * sizeof(char));
+    priority = malloc(3 * sizeof(int));
+
+    bool isBg = extractProgSpec(program, args, priority, num_trozos, trozos);
+    if (isBg) {
         pid_t pid = fork();
         if (pid == 0) {
             execvp(program, args);
             perror("execvp");
             exit(1);
+        } else if (pid != -1) {
+            newProc = malloc(sizeof(tProcess));
+            newProc->pid = pid;
+            formatDate(time(NULL), date);
+            newProc->fecha = strdup(date);
+            newProc->status = ACTIVE;
+            newProc->cmdLine = strdup(program);
+            newProc->priority = *priority;
+            if (!insertItem(newProc, LNULL, proccessList))
+                printf(ROJO_ERR "No se ha podido insertar el proceso en la "
+                                "lista.\n" RESET_COL);
+            printf("Proceso %d ejecutándose en background\n", pid);
         }
-        printf("Proceso %d ejecutándose en background\n", pid);
+
         return;
     }
 
-    // Foreground
     execvp(program, args);
-    perror("execvp");
+
+    if (errno == ENOEXEC) {
+        printf(ROJO_ERR "Comando '%s' desconocido\n" RESET_COL, trozos[0]);
+    } else if (errno == EACCES) {
+        printf(ROJO_ERR "Problema de permisos para exec\n" RESET_COL,
+               trozos[0]);
+    }
+
+    free(priority);
 }
 
-void searchCmdOnPath(char *trozos[], int num_trozos) {
-    char *program;
-    char *args[4096];
-    int *priority;
-    bool isBg = extractProgSpec(program, args, priority, num_trozos, trozos);
+void jobs(tList *proccessList) { imprimirListaProcesos(proccessList); }
 
-    if (execlp(trozos[0], trozos[1]) == -1) {
-        if (errno == ENOEXEC) {
-            printf(ROJO_ERR "Comando '%s' desconocido\n" RESET_COL, trozos[0]);
-        } else if (errno == EACCES) {
-            printf(ROJO_ERR "Problema de permisos para exec\n" RESET_COL,
-                   trozos[0]);
+void deljobs(tList *proccessList, char *trozos[], int num_trozos) {
+    if (num_trozos < 2) {
+        imprimirListaProcesos(proccessList);
+    } else {
+        tPosL pos = first(*proccessList);
+        tProcess *item;
+        procStatus status;
+
+        while (pos != LNULL) {
+            item = getItem(pos);
+            status = updatedProcStatus(item->pid);
+            if (strcmp(trozos[1],"-sig") && status == SIGNALED){
+                deleteAtPosition(pos, proccessList);
+            }
+            if(strcmp(trozos[1],"-term") && status == FINISHED){
+                deleteAtPosition(pos, proccessList);
+            }
+            pos = next(pos);
         }
     }
 }
